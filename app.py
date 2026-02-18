@@ -1,62 +1,73 @@
+import os
+import json
 import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
-import os
+# Base directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Model path
+MODEL_PATH = os.path.join(BASE_DIR, "model", "model.pkl")
+METRICS_PATH = os.path.join(BASE_DIR, "model", "metrics.json")
+st.set_page_config(page_title="Churn Prediction App", layout="wide")
 
-st.set_page_config(page_title="Customer Churn Risk Scoring", layout="centered")
+st.title("📉 Customer Churn Prediction (ML + Streamlit)")
+st.write("Upload a CSV and get churn probability predictions.")
 
-st.title("🏦 Bank Customer Churn Risk Scoring")
-st.write("Upload a CSV file of customers and get churn risk predictions.")
-
-# ----- Load model -----
-MODEL_PATH = os.path.join("models", "model.pkl")
-
-@st.cache_resource
-def load_model():
-    if not os.path.exists(MODEL_PATH):
-        return None
-    return joblib.load(MODEL_PATH)
-
-model = load_model()
-
-if model is None:
-    st.error("Model file not found: models/model.pkl")
-    st.info("Fix: Make sure your trained model exists in the repo at models/model.pkl")
+if not os.path.exists(MODEL_PATH):
+    st.error("Model not found. Run: python train.py")
     st.stop()
 
-# ----- File upload -----
-uploaded = st.file_uploader("Upload CSV", type=["csv"])
+model = joblib.load(MODEL_PATH)
 
-if uploaded is None:
-    st.info("Upload a CSV to continue.")
-    st.stop()
+col1, col2 = st.columns([2, 1])
 
-df = pd.read_csv(uploaded)
-st.subheader("Preview")
-st.dataframe(df.head())
+with col2:
+    st.subheader("Model Info")
+    if os.path.exists(METRICS_PATH):
+        metrics = json.load(open(METRICS_PATH, "r", encoding="utf-8"))
+        st.json({
+            "accuracy": metrics.get("accuracy"),
+            "precision": metrics.get("precision"),
+            "recall": metrics.get("recall"),
+            "f1": metrics.get("f1"),
+            "roc_auc": metrics.get("roc_auc"),
+            "rows": metrics.get("n_rows"),
+            "features": metrics.get("n_features"),
+        })
+    else:
+        st.info("metrics.json not found. Train the model first.")
 
-st.write("✅ Tip: The model expects the same columns used during training.")
+with col1:
+    st.subheader("Upload Data for Prediction")
+    file = st.file_uploader("Upload CSV (same columns as training features)", type=["csv"])
 
-if st.button("Predict"):
-    try:
-        preds = model.predict(df)
-        # If model supports predict_proba, show probability too
-        proba = None
-        if hasattr(model, "predict_proba"):
+    threshold = st.slider("Decision Threshold", 0.1, 0.9, 0.5, 0.05)
+
+    if file is not None:
+        df = pd.read_csv(file)
+
+        st.write("Preview:")
+        st.dataframe(df.head(10))
+
+        if st.button("Predict"):
+            if not hasattr(model, "predict_proba"):
+                st.error("Model does not support probabilities.")
+                st.stop()
+
             proba = model.predict_proba(df)[:, 1]
+            pred = (proba >= threshold).astype(int)
 
-        out = df.copy()
-        out["churn_pred"] = preds
-        if proba is not None:
-            out["churn_risk_score"] = np.round(proba, 4)
+            out = df.copy()
+            out["churn_probability"] = proba
+            out["churn_prediction"] = pred
 
-        st.subheader("Predictions")
-        st.dataframe(out.head(20))
+            st.success("✅ Predictions generated!")
+            st.dataframe(out.head(50))
 
-        csv = out.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download Predictions CSV", data=csv, file_name="churn_predictions.csv", mime="text/csv")
-
-    except Exception as e:
-        st.error("Prediction failed. This usually happens if CSV columns don't match training columns.")
-        st.write("Error details:", str(e))
+            csv_bytes = out.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Predictions CSV",
+                data=csv_bytes,
+                file_name="predictions.csv",
+                mime="text/csv",
+            )
